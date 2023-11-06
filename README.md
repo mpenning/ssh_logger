@@ -8,7 +8,7 @@ Use Netflix's [`go-expect`](https://github.com/Netflix/go-expect) library to log
 - `go mod tidy`
 - `go build -o ssh_logger main.go`
 
-## SSH into a system and log the session
+## SSH into route-views and log the SSH session
 
 - `./ssh_logger`
 
