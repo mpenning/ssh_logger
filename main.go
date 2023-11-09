@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"regexp"
 	"sync"
-	"syscall"
 	"time"
 
 	// pflag is a drop-in replacement for the golang CLI `flag` package
@@ -24,7 +23,6 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	"github.com/google/gopacket/pcapgo"
-	"golang.org/x/crypto/ssh/terminal"
 
 	// pro-bing is a very intelligent ping library from Prometheus...
 	probing "github.com/prometheus-community/pro-bing"
@@ -218,17 +216,6 @@ func sshLoginSession(opts cliOpts) int {
 	defer console.Close()
 	defer logFile.Close()
 
-	if sshAuthentication == "none" {
-	} else if sshAuthentication == "password" {
-		fmt.Println("Enter password: ")
-		passwordStr, err = terminal.ReadPassword(int(syscall.Stdin))
-		if err != nil {
-			logoru.Error(err)
-		}
-	} else {
-		logoru.Critical(fmt.Sprintf("Unhandled SSH authentication: %v", sshAuthentication))
-	}
-
 	// for now, ignore local ~/.ssh/config keyExchangAlgorithms settnigs...
 	keyExchangAlgorithms := "ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha256,diffie-hellman-group-exchange-sha1,diffie-hellman-group14-sha1,diffie-hellman-group1-sha1"
 	keyExchangeArg := fmt.Sprintf("KexAlgorithms=%v", keyExchangAlgorithms)
@@ -259,22 +246,33 @@ func sshLoginSession(opts cliOpts) int {
 	if sshAuthentication == "none" {
 		logoru.Debug("Logging in with no SSH authentication")
 	} else if sshAuthentication == "password" {
-		if true {
-			logoru.Warning("DBG 1")
-			_, err = console.Expect(expect.RegexpPattern("."))
-			if err != nil {
-				logoru.Error(err)
-			}
+
+		////////////////////////////////////////////////////////////////////////////
+		// Do NOT explicitly wait for the password prompt here
+		// just let the system prompt show up and type it
+		// interactively
+		////////////////////////////////////////////////////////////////////////////
+
+		// Send a blank line to get a prompt after successful passwd authentication
+		_, err = console.SendLine("")
+		if err != nil {
+			logoru.Error(err)
 		}
-		donec := make(chan struct{})
-		go func() {
-			defer close(donec)
-			logoru.Warning("Sending password")
-			console.SendLine(string(passwordStr))
-			logoru.Warning("DBG 3")
-			console.Send("\n")
-		}()
-		<-donec
+		_, err = console.Expect(expect.RegexpPattern(sshPromptRegex))
+		if err != nil {
+			logoru.Error(err)
+		}
+		if false {
+			logoru.Warning("DBG 1")
+			donec := make(chan struct{})
+			go func() {
+				defer close(donec)
+				logoru.Warning("Sending password")
+				console.SendLine(string(passwordStr))
+				console.Send("\n")
+			}()
+			<-donec
+		}
 	} else {
 		logoru.Critical(fmt.Sprintf("Unhandled SSH password prompt: %v", sshAuthentication))
 	}
