@@ -1,75 +1,531 @@
 package main
 
 import (
-        "os"
-        "os/exec"
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"regexp"
+	"sync"
+	"syscall"
+	"time"
 
-        expect "github.com/Netflix/go-expect"
-        "github.com/gleich/logoru"
+	// pflag is a drop-in replacement for the golang CLI `flag` package
+	"github.com/gleich/logoru"
+	"github.com/spf13/pflag"
+
+	// viper is a multi-lingual config-reader: toml, ini, json, etc...
+	"github.com/spf13/viper"
+
+	// Netflix go-expect provides a golang Expect library...
+	expect "github.com/Netflix/go-expect"
+	// gopacket requires libpcap-dev
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"github.com/google/gopacket/pcap"
+	"github.com/google/gopacket/pcapgo"
+	"golang.org/x/crypto/ssh/terminal"
+
+	// pro-bing is a very intelligent ping library from Prometheus...
+	probing "github.com/prometheus-community/pro-bing"
 )
 
+type cliOpts struct {
+	commandLogFilename string
+	yaml               string
+	sniff              string
+	sshKeepalive       int
+	pingCount          int
+	pingInterval       int
+	pingSizeBytes      int
+	failOnPingLoss     bool
+	debug              bool
+	verboseTime        bool
+}
+
 func main() {
+	////////////////////////////////////////////////////////////////////////////
+	// parse CLI flags here
+	////////////////////////////////////////////////////////////////////////////
+	commandLogFilenamePtr := pflag.String("logFilename", "commands.log", "Name of the Netflix go-expect command logfile.  Default is `commands.log`")
+	sniffPtr := pflag.String("sniff", "__UNDEFINED__", "Name of interface to sniff")
+	yamlPtr := pflag.String("yaml", "__UNDEFINED__", "Path to the YAML configuration file")
+	sshKeepalivePtr := pflag.Int("sshKeepalive", 60, "Specify ssh keepalive timeout, in seconds")
+	pingCountPtr := pflag.Int("pingCount", 0, "Specify the number of pings")
+	pingIntervalPtr := pflag.Int("pingInterval", 200, "Specify the ping interval, in milliseconds")
+	pingSizeBytesPtr := pflag.Int("pingSize", 64, "Specify the ping size, in bytes")
 
-        logFile, err := os.OpenFile("command.log", os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
-        if err != nil {
-                logoru.Critical(err)
-        }
+	failOnPingLossPtr := pflag.Bool("failOnPingLoss", false, "Flag to fail and exit on ping loss, default is False")
+	debugPtr := pflag.Bool("debug", false, "Flag to show interactive debugs of the remote host SSH session, default is False")
+	verboseTimePtr := pflag.Bool("verbose", false, "Flag to enable verbose log timestamps, default is False")
+	pflag.Parse()
 
-        //console, err := expect.NewConsole(expect.WithStdin(os.Stdin), expect.WithStdout(os.Stdout), expect.WithStdout(logFile))
-        console, err := expect.NewConsole(expect.WithStdout(logFile))
-        if err != nil {
-                logoru.Critical(err)
-        }
-        defer logFile.Close()
-        defer console.Close()
+	if *yamlPtr == "__UNDEFINED__" {
+		logoru.Critical("A yaml configuration file is required")
+	}
 
-        sshSession := exec.Command("ssh", "rviews@route-views.routeviews.org")
-        // Assign the console ssh session stdin/stdout/stderr to console TTYs...
-        sshSession.Stdin = console.Tty()
-        sshSession.Stdout = console.Tty()
-        sshSession.Stderr = console.Tty()
+	opts := cliOpts{
+		commandLogFilename: *commandLogFilenamePtr,
+		yaml:               *yamlPtr,
+		sshKeepalive:       *sshKeepalivePtr,
+		sniff:              *sniffPtr,
+		pingCount:          *pingCountPtr,
+		pingInterval:       *pingIntervalPtr,
+		pingSizeBytes:      *pingSizeBytesPtr,
+		failOnPingLoss:     *failOnPingLossPtr,
+		debug:              *debugPtr,
+		verboseTime:        *verboseTimePtr,
+	}
 
-        // start the ssh session command...
-        err = sshSession.Start()
-        if err != nil {
-                logoru.Error(err)
-        }
-        logoru.Info("Spawned ssh")
+	////////////////////////////////////////////////////////////////////////////
+	// run in an infinite loop unless processSleepSeconds is 0
+	////////////////////////////////////////////////////////////////////////////
+	var processSleepSeconds int
+	ii := 0
+	for {
+		logoru.Debug(fmt.Sprintf("Starting SSH loop idx: %v", ii))
+		processSleepSeconds = sshLoginSession(opts)
+		if processSleepSeconds == 0 {
+			break
+		} else {
+			logoru.Debug(fmt.Sprintf("Continue SSH loop, sleeping %v seconds", processSleepSeconds))
+			time.Sleep(time.Duration(time.Duration(processSleepSeconds) * time.Second))
+			ii++
+		}
+	}
 
-        _, err = console.ExpectString("route-views>")
-        if err != nil {
-                logoru.Error(err)
-        }
-        logoru.Info("Found route-views prompt")
+}
 
-        console.SendLine("term len 0")
+func sshLoginSession(opts cliOpts) int {
 
-        _, err = console.ExpectString("route-views>")
-        if err != nil {
-                logoru.Error(err)
-        }
-        logoru.Info("Found another route-views prompt")
+	var passwordStr []byte
 
-        logoru.Info("Sending bgp command")
-        console.SendLine("show ip bgp 1.1.1.1 best")
-        _, err = console.ExpectString("route-views>")
-        if err != nil {
-                logoru.Error(err)
-        }
-        logoru.Info("Completed bgp command")
+	////////////////////////////////////////////////////////////////////////////
+	// Initial ini-file support here
+	////////////////////////////////////////////////////////////////////////////
+	configReader := viper.New()
+	configReader.AddConfigPath(".") // read from this directory
+	// for Cisco IOS (and other vendor) commands, yaml markup is
+	// superior to ini markup.
+	configReader.SetConfigName(opts.yaml)
+	configReader.SetConfigType("yaml")
+	err := configReader.ReadInConfig()
+	if err != nil {
+		logoru.Critical(err)
+	}
+	// Read the slice of commands listed under the ssh_logger / commands keys...
+	locationStr := configReader.GetString("ssh_logger.timezone_location")
+	sshUser := configReader.GetString("ssh_logger.ssh_user")
+	sshHost := configReader.GetString("ssh_logger.ssh_host")
+	sshAuthentication := configReader.GetString("ssh_logger.ssh_authentication")
+	sshPromptRegex := configReader.GetString("ssh_logger.ssh_prompt_regex")
+	processSleepSeconds := configReader.GetInt("ssh_logger.process_loop_sleep_seconds")
+	//sshEnableCmd := configReader.GetString("ssh_logger.ssh_enable_commmand")
+	clockCmd := configReader.GetString("ssh_logger.prefix_command")
+	myCommands := configReader.GetStringSlice("ssh_logger.commands")
 
-        // exit the console and wait for the ssh session to finish...
-        console.SendLine("exit")
-        err = sshSession.Wait()
-        if err != nil {
-                logoru.Error(err)
-        }
+	/////////////////////////////////////////////////////////////////////////////
+	// Open a new SSH command log file here
+	/////////////////////////////////////////////////////////////////////////////
+	logFile, err := os.OpenFile(opts.commandLogFilename, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
+	if err != nil {
+		logoru.Critical(err)
+	}
 
-        console.Tty().Close()
-        matchString, err := console.Expect(expect.RegexpPattern(`Connection to \S+ closed.`))
-        if err != nil {
-                logoru.Error(err)
-        }
-        logoru.Debug(matchString)
+	////////////////////////////////////////////////////////////////////////////
+	// Check permissions on pinging and sniffing...
+	////////////////////////////////////////////////////////////////////////////
+	if os.Geteuid() > 0 && opts.pingCount > 0 {
+		logoru.Error("pinging requires root privs")
+	}
+	if os.Geteuid() > 0 && opts.sniff != "__UNDEFINED__" {
+		logoru.Error("Sniffing requires root privs")
+	}
 
+	sshHostStr := fmt.Sprintf("%v@%v", sshUser, sshHost)
+
+	// Sniff the initial ping packets to the sshHost
+	ctx, cancelPcap := context.WithCancel(context.Background())
+	waitGroup := &sync.WaitGroup{}
+	if opts.sniff != "__UNDEFINED__" {
+		pcapFilterStr := fmt.Sprintf("host %v", sshHost)
+		go capturePackets(ctx, waitGroup, opts.sniff, pcapFilterStr)
+	}
+
+	// define a UTC time location
+	utcTimeZone, err := time.LoadLocation("UTC")
+	if err != nil {
+		logoru.Error(err)
+	}
+
+	// define a local time location
+	// locationStr should be something like 'America/Chicago'
+	locationTimeZone, err := time.LoadLocation(locationStr)
+	if err != nil {
+		logoru.Error(err)
+	}
+
+	login := time.Now()
+
+	if opts.pingCount > 0 {
+
+		pingTimeStamp := fmt.Sprintf("\n~~~ PING attempt to %v at %v / %v ~~~\n", sshHost, login.In(utcTimeZone), login.In(locationTimeZone))
+		_, err = logFile.WriteString(pingTimeStamp)
+		if err != nil {
+			logoru.Error(err)
+		}
+
+		/////////////////////////////////////////////////////////////////////////////
+		// Build a new Prometheus pro-bing ICMP ping probe and print ping-stats
+		// to stdout
+		/////////////////////////////////////////////////////////////////////////////
+		startPing, err := probing.NewPinger(sshHost)
+		// Derive ping timeout in seconds from CLI *pingInterval (in milliseconds).
+		// This timeout assumes we wait for one more ping timeout than --pingCount
+		// specified from the CLI.
+		pingTimeoutSeconds := ((time.Duration(opts.pingInterval) * time.Millisecond) * time.Duration(opts.pingCount+1)).Milliseconds() / 1000.0
+		startPing.Size = opts.pingSizeBytes
+		startPing.Count = opts.pingCount
+		startPing.Interval = time.Duration(opts.pingInterval) * time.Millisecond
+		startPing.Timeout = time.Duration(pingTimeoutSeconds) * time.Second
+		// As of 8-Nov-2023, pinger.MaxRtt is still waiting on a PR review before
+		// merge.  See https://github.com/prometheus-community/pro-bing/pull/49
+		// startPing.MaxRtt = time.Duration(pingTimeoutSeconds) * time.Second
+		startPing.SetPrivileged(true)
+		err = startPing.Run() // Blocks until finished.
+		if err != nil {
+			logoru.Critical(err)
+		}
+
+		stats := startPing.Statistics()
+		if stats.PacketsRecv == 0 {
+			if opts.failOnPingLoss {
+				// logoru.Critical() automatically makes the binary die...
+				logoru.Critical(fmt.Sprintf("0 of %v ICMP %v byte ping packets received (per-ping timeout: %v milliseconds); failing.", opts.pingCount, opts.pingSizeBytes, opts.pingInterval))
+
+			} else {
+				// logoru.Warning() allows the program to continue...
+				logoru.Warning(fmt.Sprintf("0 of %v ICMP %v byte ping packets received (per-ping timeout: %v milliseconds); skipping login while host is down.", opts.pingCount, opts.pingSizeBytes, opts.pingInterval))
+				return processSleepSeconds
+			}
+		}
+		// Call printPingStats()
+		printPingStats(stats, opts.pingSizeBytes)
+	}
+
+	// get an expect console, and debug if called as such...
+	console := newExpectConsole(opts.debug, logFile)
+	defer console.Close()
+	defer logFile.Close()
+
+	if sshAuthentication == "none" {
+	} else if sshAuthentication == "password" {
+		fmt.Println("Enter password: ")
+		passwordStr, err = terminal.ReadPassword(int(syscall.Stdin))
+		if err != nil {
+			logoru.Error(err)
+		}
+	} else {
+		logoru.Critical(fmt.Sprintf("Unhandled SSH authentication: %v", sshAuthentication))
+	}
+
+	// for now, ignore local ~/.ssh/config keyExchangAlgorithms settnigs...
+	keyExchangAlgorithms := "ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha256,diffie-hellman-group-exchange-sha1,diffie-hellman-group14-sha1,diffie-hellman-group1-sha1"
+	keyExchangeArg := fmt.Sprintf("KexAlgorithms=%v", keyExchangAlgorithms)
+	keepAliveArg := fmt.Sprintf("ServerAliveInterval=%v", opts.sshKeepalive)
+	if opts.debug {
+		logoru.Debug(fmt.Sprintf("Calling `ssh -o %v -o %v %v`", keepAliveArg, keyExchangeArg, sshHostStr))
+	}
+	sshSession := exec.Command("ssh", "-o", keepAliveArg, "-o", keyExchangeArg, sshHostStr)
+
+	loginTimeStamp := fmt.Sprintf("\n~~~ LOGIN attempt to %v at %v / %v ~~~\n", sshHostStr, login.In(utcTimeZone), login.In(locationTimeZone))
+	_, err = logFile.WriteString(loginTimeStamp)
+	if err != nil {
+		logoru.Error(err)
+	}
+
+	// Assign the console ssh session stdin/stdout/stderr to console TTYs...
+	sshSession.Stdin = console.Tty()
+	sshSession.Stderr = console.Tty()
+	sshSession.Stdout = console.Tty()
+
+	// start the ssh session command...
+	err = sshSession.Start()
+	if err != nil {
+		logoru.Error(err)
+	}
+	logoru.Info("Spawned ssh")
+
+	if sshAuthentication == "none" {
+		logoru.Debug("Logging in with no SSH authentication")
+	} else if sshAuthentication == "password" {
+		if true {
+			logoru.Warning("DBG 1")
+			_, err = console.Expect(expect.RegexpPattern("."))
+			if err != nil {
+				logoru.Error(err)
+			}
+		}
+		donec := make(chan struct{})
+		go func() {
+			defer close(donec)
+			logoru.Warning("Sending password")
+			console.SendLine(string(passwordStr))
+			logoru.Warning("DBG 3")
+			console.Send("\n")
+		}()
+		<-donec
+	} else {
+		logoru.Critical(fmt.Sprintf("Unhandled SSH password prompt: %v", sshAuthentication))
+	}
+
+	/////////////////////////////////////////////////////////////////////////////
+	// erroneousMatch finds `sshPromptRegex`, but it also captures all
+	// other multiline input before it.  The following code isolates the
+	// match to just the sshPromptRegex
+	/////////////////////////////////////////////////////////////////////////////
+	erroneousMatch, err := console.Expect(expect.RegexpPattern(sshPromptRegex))
+	matchGroupRegex := regexp.MustCompile(fmt.Sprintf("(?P<re_prompt>%v)", sshPromptRegex))
+	match := matchGroupRegex.FindStringSubmatch(erroneousMatch)
+	namedMatch := make(map[string]string)
+	for idx, matchGroup := range matchGroupRegex.SubexpNames() {
+		if idx != 0 && matchGroup != "" {
+			namedMatch[matchGroup] = match[idx]
+		}
+	}
+	matchPromptStr := namedMatch["re_prompt"]
+	/////////////////////////////////////////////////////////////////////////////
+	logMsg := fmt.Sprintf("SSH logged into %v, and found a `%v` prompt", sshHost, matchPromptStr)
+	logoru.Info(logMsg)
+
+	/////////////////////////////////////////////////////////////////////////////
+	// send each command in the YAML file to sshHost
+	/////////////////////////////////////////////////////////////////////////////
+	for idx, _ := range myCommands {
+		logoru.Info(myCommands[idx])
+		logPrefixConsoleCmd(*console, *logFile, sshSession, opts.verboseTime, locationStr, sshPromptRegex, clockCmd, myCommands[idx])
+	}
+
+	//err = sshSession.Wait()
+	//matchString, err := console.Expect(expect.RegexpPattern(`closed`))
+	//logoru.Debug(matchString)
+	//if err != nil {
+	//	logoru.Warning(err)
+	//}
+
+	logoru.Success("SSH Session finished")
+	console.Tty().Close()
+
+	logoru.Info("SSH Output done")
+
+	// WriteString() a couple of blank lines
+	_, err = logFile.WriteString("\n\n")
+	if err != nil {
+		logoru.Error(err)
+	}
+
+	if opts.sniff != "__UNDEFINED__" {
+		// Stop the pcap... gopacket will not stop capturing until one more packet
+		// is sent.  We are using Prometheus pro-bing ICMP pings for this purpose.
+		defer waitGroup.Wait()
+		defer waitGroup.Done()
+		cancelPcap()
+		pcapFinishPinger, err := probing.NewPinger(sshHost)
+		pcapFinishPinger.Size = opts.pingSizeBytes
+		pcapFinishPinger.Count = 1
+		pcapFinishPinger.Interval = time.Duration(opts.pingInterval) * time.Millisecond
+		pcapFinishPinger.SetPrivileged(true)
+		err = pcapFinishPinger.Run() // Blocks until finished.
+		if err != nil {
+			logoru.Critical(err)
+		}
+	}
+
+	return processSleepSeconds
+
+}
+
+func newExpectConsole(debug bool, logFile *os.File) *expect.Console {
+	/////////////////////////////////////////////////////////////////////////////
+	// Create a new Netflix go-expect console and return it...
+	/////////////////////////////////////////////////////////////////////////////
+
+	if debug {
+		// Use this to see all interactive send / expect session...
+		console, err := expect.NewConsole(expect.WithStdin(os.Stdin), expect.WithStdout(os.Stdout), expect.WithStdout(logFile))
+		if err != nil {
+			logoru.Critical(err)
+		}
+		return console
+	} else {
+		// Disable all interactive send / expect info to stdout...
+		console, err := expect.NewConsole(expect.WithStdout(logFile))
+		if err != nil {
+			logoru.Critical(err)
+		}
+		return console
+	}
+}
+
+func logPrefixConsoleCmd(console expect.Console, logFile os.File, sshSession *exec.Cmd, verboseTime bool, locationStr string, sshPromptRegex string, prefixCmd string, cmd string) {
+	////////////////////////////////////////////////////////////////////////////
+	//
+	// logPrefixConsoleCommand() can be used when you want to run two commands
+	// together.  This is useful as a hack around the lack of Cisco's
+	// `term exec prompt timestamp` VTY command.
+	//
+	// The following arguments are accepted:
+	//
+	// console: a Netflix go-expect instance that logs to logFile
+	// logFile: a go file handle from os.OpenFile()
+	// verboseTime: a bool to enable verbose log file timestamps
+	// locationStr: a `time` localization string like 'America/Chicago'
+	// sshPromptRegex: 'route-views>' (unpriv Cisco IOS example)
+	// prefixCmd: 'show clock' (unpriv Cisco IOS example), if '' dont run a cmd
+	// cmd: 'show ip route' (Cisco IOS example)
+	//
+	// Usage to get verbose timestamp logs of `show ip route 1.1.1.1`:
+	//
+	// logPairConsoleCommand(console, logFile, true, "America/Chicago", "route-views>", "show clock", "show ip route 1.1.1.1")
+	//
+	////////////////////////////////////////////////////////////////////////////
+
+	utcTimeZone, err := time.LoadLocation("UTC")
+	if err != nil {
+		logoru.Error(err)
+	}
+
+	// locationStr should be something like 'America/Chicago'
+	locationTimeZone, err := time.LoadLocation(locationStr)
+	if err != nil {
+		logoru.Error(err)
+	}
+
+	// run prefixCmd
+	console.SendLine(prefixCmd)
+	_, err = console.Expect(expect.RegexpPattern(sshPromptRegex))
+	if err != nil {
+		logoru.Error(err)
+	}
+
+	begin := time.Now()
+	if verboseTime {
+		beginTimeStamp := fmt.Sprintf("\n~~~ CMD BEGIN %v / %v ~~~\n", begin.In(utcTimeZone), begin.In(locationTimeZone))
+		_, err = logFile.WriteString(beginTimeStamp)
+		if err != nil {
+			logoru.Error(err)
+		}
+	}
+
+	// run empty cmd to get another logged prompt
+	console.SendLine("")
+	_, err = console.Expect(expect.RegexpPattern(sshPromptRegex))
+	if err != nil {
+		logoru.Error(err)
+	}
+
+	// run cmd
+	console.SendLine(cmd)
+	if cmd == "exit" || cmd == "quit" || cmd == "logout" {
+		// if the last explicit command, wait for the ssh session to finish here...
+		err = sshSession.Wait()
+		if err != nil {
+			logoru.Error(err)
+		}
+	} else {
+		// run empty cmd to get another logged prompt
+		_, err = console.Expect(expect.RegexpPattern(sshPromptRegex))
+		if err != nil {
+			logoru.Error(err)
+		}
+		console.SendLine("")
+		_, err = console.Expect(expect.RegexpPattern(sshPromptRegex))
+		if err != nil {
+			logoru.Error(err)
+		}
+	}
+
+	// capture the commands finish time
+	finish := time.Now()
+
+	if verboseTime {
+		// subtract begin from finish and WriteString() the elapsed time
+		elapsed := fmt.Sprintf("\n~~~   CMD ELAPSED %v ~~~\n", finish.Sub(begin))
+		_, err = logFile.WriteString(elapsed)
+		if err != nil {
+			logoru.Error(err)
+		}
+	}
+
+	if verboseTime {
+		// WriteString() the absolute time
+		finishTimeStamp := fmt.Sprintf("~~~   CMD FINISH %v / %v ~~~\n\n", finish.In(utcTimeZone), finish.In(locationTimeZone))
+		_, err = logFile.WriteString(finishTimeStamp)
+		if err != nil {
+			logoru.Error(err)
+		}
+	}
+
+}
+
+func capturePackets(ctx context.Context, waitGroup *sync.WaitGroup, iface, bpfFilter string) {
+	waitGroup.Add(1)
+	defer waitGroup.Done()
+
+	//ifaces, err := pcap.FindAllDevs()
+	//if err != nil {
+	//	logoru.Error(err)
+	//}
+
+	for packet := range packets(ctx, waitGroup, iface, bpfFilter) {
+		logoru.Debug(packet)
+	}
+}
+
+func packets(ctx context.Context, waitGroup *sync.WaitGroup, iface, bpfFilter string) chan gopacket.Packet {
+	maxMtu := 9000
+
+	fh, err := os.Create("session.pcap")
+	if err != nil {
+		logoru.Error(err)
+	}
+	defer fh.Close()
+
+	pcapwriter := pcapgo.NewWriter(fh)
+	if err := pcapwriter.WriteFileHeader(1600, layers.LinkTypeEthernet); err != nil {
+		if err != nil {
+			logoru.Critical(err)
+		}
+	}
+
+	if handle, err := pcap.OpenLive(iface, int32(maxMtu), false, pcap.BlockForever); err != nil {
+		logoru.Critical(err)
+	} else if err = handle.SetBPFFilter(bpfFilter); err != nil {
+		logoru.Critical(err)
+	} else {
+		ps := gopacket.NewPacketSource(handle, handle.LinkType())
+		for packet := range ps.Packets() {
+			if err := pcapwriter.WritePacket(packet.Metadata().CaptureInfo, packet.Data()); err != nil {
+				logoru.Critical(err)
+			}
+		}
+		go func() {
+			waitGroup.Add(1)
+			defer waitGroup.Done()
+			<-ctx.Done()
+			logoru.Debug("Closing the pcap handle.")
+			handle.Close()
+			logoru.Debug("Closed the pcap handle.")
+		}()
+		return ps.Packets()
+	}
+	return nil
+}
+
+func printPingStats(stats *probing.Statistics, pingSize int) {
+	fmt.Printf("\n--- %s ping statistics ---\n", stats.Addr)
+	fmt.Printf("%d %v byte packets transmitted, %d packets received, %v%% packet loss\n",
+		stats.PacketsSent, pingSize, stats.PacketsRecv, stats.PacketLoss)
+	fmt.Printf("round-trip min/avg/max/stddev = %v/%v/%v/%v\n",
+		stats.MinRtt, stats.AvgRtt, stats.MaxRtt, stats.StdDevRtt)
 }
