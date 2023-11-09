@@ -8,6 +8,9 @@
 *.so
 *.dylib
 
+# go.sum should always be ignored by git
+go.sum
+
 # Test binary, built with `go test -c`
 *.test
 
