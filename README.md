@@ -16,7 +16,7 @@ You need to have [`ssh`][6] and [`sshpass`][7] installed in your operating-syste
 
 Pinging and sniffing require root privileges.
 
-## Use case
+# Use case
 
 Example of logging into a localhost (running linux) as `mpenning`, run `ls -la | grep vim` with command timestamps, and no pings:
 
@@ -43,7 +43,7 @@ ssh_logger:
   - exit
 ```
 
-## Help
+# Help
 
 ```
 $ ./ssh_logger -h
@@ -60,7 +60,7 @@ Usage of ./ssh_logger:
       --yaml string                Path to the YAML configuration file (default "__UNDEFINED__")
 ```
 
-## Build the binary
+# Build the binary
 
 Use [GNU `make`][5]
 
@@ -70,7 +70,7 @@ or
 
 - `go build -o ssh_logger main.go`
 
-## Inspiration from real life
+# Inspiration from real life
 
 - Question: Why did you build a custom Go binary to log ssh sessions when you can simply log the output of an ssh session with the [`script`][4] command: `script -c 'ssh foo@bar' log.txt`?
 - Answer: Key words above are "batteries included".  Real ssh session drops often devolve into a basket of unfun and time-consuming tasks.
@@ -93,7 +93,7 @@ Assume ssh sessions are dropping on your production database server; that's an i
 - ping logs from the server
 - sniffer logs
 
-## License and Copyright
+# License and Copyright
 
 - Apache 2.0 License
 - Copyright David Michael Pennington, 2023
