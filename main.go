@@ -5,29 +5,30 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
+	"path/filepath"
 	"regexp"
 	"sync"
 	"time"
 
-	// pflag is a drop-in replacement for the golang CLI `flag` package
+	// logoru provides fancy logging similar to python loguru
 	"github.com/gleich/logoru"
+	// pflag is a drop-in replacement for the golang CLI `flag` package
 	"github.com/spf13/pflag"
-
 	// viper is a multi-lingual config-reader: toml, ini, json, etc...
 	"github.com/spf13/viper"
-
+	// Use this to read the password from the terminal
 	"golang.org/x/crypto/ssh/terminal"
 
 	// Netflix go-expect provides a golang Expect library...
 	expect "github.com/Netflix/go-expect"
+	// pro-bing is an intelligent ping library from Prometheus...
+	probing "github.com/prometheus-community/pro-bing"
 	// gopacket requires libpcap-dev
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	"github.com/google/gopacket/pcapgo"
-
-	// pro-bing is a very intelligent ping library from Prometheus...
-	probing "github.com/prometheus-community/pro-bing"
 )
 
 type cliOpts struct {
@@ -91,15 +92,37 @@ func main() {
 	}
 
 	////////////////////////////////////////////////////////////////////////////
-	// Initial ini-file support here
+	// Create application config directories
+	////////////////////////////////////////////////////////////////////////////
+	relative_path := filepath.Join("configs")
+	err := os.MkdirAll(relative_path, os.ModePerm)
+	if err != nil {
+		logoru.Critical(err)
+	}
+
+	// The 'os/user' package allows us to get a relative path, and also the home
+	// directory
+	currentDir, err := user.Current()
+	if err != nil {
+		logoru.Critical(err)
+	}
+	homePath := filepath.Join(currentDir.HomeDir, ".ssh_logger", "configs")
+	err = os.MkdirAll(homePath, os.ModePerm)
+	if err != nil {
+		logoru.Critical(err)
+	}
+
+	////////////////////////////////////////////////////////////////////////////
+	// Initial YAML-file support here
 	////////////////////////////////////////////////////////////////////////////
 	configReader := viper.New()
-	configReader.AddConfigPath(".") // read from this directory
+	configReader.AddConfigPath(".")                          // read relative to this directory
+	configReader.AddConfigPath("$HOME/.ssh_logger/configs/") // read from the home directory
 	// for Cisco IOS (and other vendor) commands, yaml markup is
 	// superior to ini markup.
 	configReader.SetConfigName(opts.yaml)
 	configReader.SetConfigType("yaml")
-	err := configReader.ReadInConfig()
+	err = configReader.ReadInConfig()
 	if err != nil {
 		logoru.Critical(err)
 	}
@@ -110,13 +133,18 @@ func main() {
 	sshAuthentication := configReader.GetString("ssh_logger.ssh_authentication")
 	sshPromptRegex := configReader.GetString("ssh_logger.ssh_prompt_regex")
 	processSleepSeconds := configReader.GetInt("ssh_logger.process_loop_sleep_seconds")
-	//sshEnableCmd := configReader.GetString("ssh_logger.ssh_enable_commmand")
+	// There is no support for SSH Enable (i.e. from Cisco IOS) yet...
+	// sshEnableCmd := configReader.GetString("ssh_logger.ssh_enable_commmand")
 	clockCmd := configReader.GetString("ssh_logger.prefix_command")
 	myCommands := configReader.GetStringSlice("ssh_logger.commands")
 
+	/////////////////////////////////////////////////////////////////////////////
+	// Read the SSH password if the YAML config asks for password authentication
+	/////////////////////////////////////////////////////////////////////////////
 	var password string
 	if sshAuthentication != "none" {
 		fmt.Print("Enter SSH password: ")
+		// ReadPassword() returns a slice of bytes, not a string
 		passwordBytes, err := terminal.ReadPassword(0)
 		if err != nil {
 			logoru.Critical(err)
@@ -157,10 +185,6 @@ func main() {
 
 func sshLoginSession(opts cliOpts, config yamlConfig) int {
 
-	// Read the slice of commands listed under the ssh_logger / commands keys...
-	locationStr := config.tzLocation
-	sshUser := config.sshUser
-	sshHost := config.sshHost
 	sshAuthentication := config.sshAuthentication
 	sshPromptRegex := config.sshPromptRegex
 	processSleepSeconds := config.processSleepSeconds
@@ -185,13 +209,13 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 		logoru.Error("Sniffing requires root privs")
 	}
 
-	sshHostStr := fmt.Sprintf("%v@%v", sshUser, sshHost)
+	sshHostStr := fmt.Sprintf("%v@%v", config.sshUser, config.sshHost)
 
 	// Sniff the initial ping packets to the sshHost
 	ctx, cancelPcap := context.WithCancel(context.Background())
 	waitGroup := &sync.WaitGroup{}
 	if opts.sniff != "__UNDEFINED__" {
-		pcapFilterStr := fmt.Sprintf("host %v", sshHost)
+		pcapFilterStr := fmt.Sprintf("host %v", config.sshHost)
 		go capturePackets(ctx, waitGroup, opts.sniff, pcapFilterStr)
 	}
 
@@ -203,7 +227,7 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 
 	// define a local time location
 	// locationStr should be something like 'America/Chicago'
-	locationTimeZone, err := time.LoadLocation(locationStr)
+	locationTimeZone, err := time.LoadLocation(config.tzLocation)
 	if err != nil {
 		logoru.Error(err)
 	}
@@ -212,7 +236,7 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 
 	if opts.pingCount > 0 {
 
-		pingTimeStamp := fmt.Sprintf("\n~~~ PING attempt to %v at %v / %v ~~~\n", sshHost, login.In(utcTimeZone), login.In(locationTimeZone))
+		pingTimeStamp := fmt.Sprintf("\n~~~ PING attempt to %v at %v / %v ~~~\n", config.sshHost, login.In(utcTimeZone), login.In(locationTimeZone))
 		_, err = logFile.WriteString(pingTimeStamp)
 		if err != nil {
 			logoru.Error(err)
@@ -222,7 +246,7 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 		// Build a new Prometheus pro-bing ICMP ping probe and print ping-stats
 		// to stdout
 		/////////////////////////////////////////////////////////////////////////////
-		startPing, err := probing.NewPinger(sshHost)
+		startPing, err := probing.NewPinger(config.sshHost)
 		// Derive ping timeout in seconds from CLI *pingInterval (in milliseconds).
 		// This timeout assumes we wait for one more ping timeout than --pingCount
 		// specified from the CLI.
@@ -328,7 +352,7 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 	}
 	matchPromptStr := namedMatch["re_prompt"]
 	/////////////////////////////////////////////////////////////////////////////
-	logMsg := fmt.Sprintf("SSH logged into %v, and found a `%v` prompt", sshHost, matchPromptStr)
+	logMsg := fmt.Sprintf("SSH logged into %v, and found a `%v` prompt", config.sshHost, matchPromptStr)
 	logoru.Info(logMsg)
 
 	/////////////////////////////////////////////////////////////////////////////
@@ -336,7 +360,7 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 	/////////////////////////////////////////////////////////////////////////////
 	for idx, _ := range myCommands {
 		logoru.Info(myCommands[idx])
-		logPrefixConsoleCmd(*console, *logFile, sshSession, opts.verboseTime, locationStr, sshPromptRegex, clockCmd, myCommands[idx])
+		logPrefixConsoleCmd(*console, *logFile, sshSession, opts.verboseTime, config.tzLocation, sshPromptRegex, clockCmd, myCommands[idx])
 	}
 
 	//err = sshSession.Wait()
@@ -363,7 +387,7 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 		defer waitGroup.Wait()
 		defer waitGroup.Done()
 		cancelPcap()
-		pcapFinishPinger, err := probing.NewPinger(sshHost)
+		pcapFinishPinger, err := probing.NewPinger(config.sshHost)
 		pcapFinishPinger.Size = opts.pingSizeBytes
 		pcapFinishPinger.Count = 1
 		pcapFinishPinger.Interval = time.Duration(opts.pingInterval) * time.Millisecond
