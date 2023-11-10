@@ -1,14 +1,14 @@
 
 ssh_logger:
-  timezone_location: America/Chicago
+  timezone_location: "America/Chicago"
   process_loop_sleep_seconds: 5
-  ssh_user: mpenning
-  ssh_host: localhost
-  ssh_authentication: password
+  ssh_user: "mpenning"
+  ssh_host: "localhost"
+  ssh_authentication: "password"
   ssh_prompt_regex: \$
-  ssh_enable_command: enable
-  prefix_command: date
+  ssh_privilege_command:
+  prefix_command: "date"
   commands:
-  - ls -la | grep vim
-  - exit
+  - "ls -la | grep vim"
+  - "exit"
 

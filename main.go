@@ -45,15 +45,16 @@ type cliOpts struct {
 }
 
 type yamlConfig struct {
-	tzLocation          string
-	sshUser             string
-	sshHost             string
-	sshAuthentication   string
-	sshPassword         string
-	sshPromptRegex      string
-	processSleepSeconds int
-	clockCmd            string
-	commands            []string
+	tzLocation              string
+	sshUser                 string
+	sshHost                 string
+	sshAuthentication       string
+	sshPassword             string
+	sshPromptRegex          string
+	processLoopSleepSeconds int
+	sshPrivilegeCmd         string
+	prefixCmd               string
+	commands                []string
 }
 
 func main() {
@@ -106,6 +107,7 @@ func main() {
 	if err != nil {
 		logoru.Critical(err)
 	}
+	// Use '~/.ssh_logger/configs/' as a possible location for all configurations
 	homePath := filepath.Join(currentDir.HomeDir, ".ssh_logger", "configs")
 	err = os.MkdirAll(homePath, os.ModePerm)
 	if err != nil {
@@ -132,52 +134,60 @@ func main() {
 	sshHost := configReader.GetString("ssh_logger.ssh_host")
 	sshAuthentication := configReader.GetString("ssh_logger.ssh_authentication")
 	sshPromptRegex := configReader.GetString("ssh_logger.ssh_prompt_regex")
-	processSleepSeconds := configReader.GetInt("ssh_logger.process_loop_sleep_seconds")
+	processLoopSleepSeconds := configReader.GetInt("ssh_logger.process_loop_sleep_seconds")
 	// There is no support for SSH Enable (i.e. from Cisco IOS) yet...
-	// sshEnableCmd := configReader.GetString("ssh_logger.ssh_enable_commmand")
-	clockCmd := configReader.GetString("ssh_logger.prefix_command")
+	sshPrivilegeCmd := configReader.GetString("ssh_logger.ssh_privilege_command")
+	prefixCmd := configReader.GetString("ssh_logger.prefix_command")
 	myCommands := configReader.GetStringSlice("ssh_logger.commands")
 
 	/////////////////////////////////////////////////////////////////////////////
 	// Read the SSH password if the YAML config asks for password authentication
 	/////////////////////////////////////////////////////////////////////////////
 	var password string
-	if sshAuthentication != "none" {
-		fmt.Print("Enter SSH password: ")
-		// ReadPassword() returns a slice of bytes, not a string
-		passwordBytes, err := terminal.ReadPassword(0)
-		if err != nil {
-			logoru.Critical(err)
+	// handle 'password' or 'password:/path/to/ssh/privatekey'
+	if len(sshAuthentication) >= 8 {
+		if sshAuthentication[0:8] == "password" {
+			// for now, assume the line and privilege password are the same
+			fmt.Print("Enter SSH line and privilege password: ")
+			// ReadPassword() returns a slice of bytes, not a string
+			passwordBytes, err := terminal.ReadPassword(0)
+			if err != nil {
+				logoru.Critical(err)
+			}
+			password = string(passwordBytes)
+			fmt.Println("") // send a newline to stdout
+		} else {
+			password = ""
 		}
-		password = string(passwordBytes)
 	} else {
 		password = ""
 	}
 
 	config := yamlConfig{
-		tzLocation:          locationStr,
-		sshUser:             sshUser,
-		sshHost:             sshHost,
-		sshAuthentication:   sshAuthentication,
-		sshPassword:         password,
-		sshPromptRegex:      sshPromptRegex,
-		processSleepSeconds: processSleepSeconds,
-		clockCmd:            clockCmd,
-		commands:            myCommands,
+		tzLocation:              locationStr,
+		sshUser:                 sshUser,
+		sshHost:                 sshHost,
+		sshAuthentication:       sshAuthentication,
+		sshPassword:             password,
+		sshPromptRegex:          sshPromptRegex,
+		processLoopSleepSeconds: processLoopSleepSeconds,
+		sshPrivilegeCmd:         sshPrivilegeCmd,
+		prefixCmd:               prefixCmd,
+		commands:                myCommands,
 	}
 
 	////////////////////////////////////////////////////////////////////////////
-	// run in an infinite loop unless processSleepSeconds is 0
+	// run in an infinite loop unless processLoopSleepSeconds is 0
 	////////////////////////////////////////////////////////////////////////////
 	ii := 0
 	for {
 		logoru.Debug(fmt.Sprintf("Starting SSH loop idx: %v", ii))
-		processSleepSeconds = sshLoginSession(opts, config)
-		if processSleepSeconds == 0 {
+		processLoopSleepSeconds = sshLoginSession(opts, config)
+		if processLoopSleepSeconds == 0 {
 			break
 		} else {
-			logoru.Debug(fmt.Sprintf("Continue SSH loop, sleeping %v seconds", processSleepSeconds))
-			time.Sleep(time.Duration(time.Duration(processSleepSeconds) * time.Second))
+			logoru.Debug(fmt.Sprintf("Continue SSH loop, sleeping %v seconds", processLoopSleepSeconds))
+			time.Sleep(time.Duration(time.Duration(processLoopSleepSeconds) * time.Second))
 			ii++
 		}
 	}
@@ -187,8 +197,9 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 
 	sshAuthentication := config.sshAuthentication
 	sshPromptRegex := config.sshPromptRegex
-	processSleepSeconds := config.processSleepSeconds
-	clockCmd := config.clockCmd
+	processLoopSleepSeconds := config.processLoopSleepSeconds
+	sshPrivilegeCmd := config.sshPrivilegeCmd
+	prefixCmd := config.prefixCmd
 	myCommands := config.commands
 
 	/////////////////////////////////////////////////////////////////////////////
@@ -273,7 +284,7 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 			} else {
 				// logoru.Warning() allows the program to continue...
 				logoru.Warning(fmt.Sprintf("0 of %v ICMP %v byte ping packets received (per-ping timeout: %v milliseconds); skipping login while host is down.", opts.pingCount, opts.pingSizeBytes, opts.pingInterval))
-				return processSleepSeconds
+				return processLoopSleepSeconds
 			}
 		}
 		// Call printPingStats()
@@ -311,7 +322,7 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 	if err != nil {
 		logoru.Error(err)
 	}
-	logoru.Info("Spawned ssh")
+	logoru.Info(fmt.Sprintf("Spawned ssh to %v", config.sshHost))
 
 	if sshAuthentication == "none" {
 		logoru.Debug("Logging in with no SSH authentication")
@@ -358,9 +369,14 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 	/////////////////////////////////////////////////////////////////////////////
 	// send each command in the YAML file to sshHost
 	/////////////////////////////////////////////////////////////////////////////
+	if sshPrivilegeCmd != "" {
+		logoru.Info(sshPrivilegeCmd)
+		// Send sshPrivilegeCmd once
+		logPrefixConsoleCmd(*console, *logFile, sshSession, opts.verboseTime, config.tzLocation, sshPromptRegex, prefixCmd, sshPrivilegeCmd)
+	}
 	for idx, _ := range myCommands {
 		logoru.Info(myCommands[idx])
-		logPrefixConsoleCmd(*console, *logFile, sshSession, opts.verboseTime, config.tzLocation, sshPromptRegex, clockCmd, myCommands[idx])
+		logPrefixConsoleCmd(*console, *logFile, sshSession, opts.verboseTime, config.tzLocation, sshPromptRegex, prefixCmd, myCommands[idx])
 	}
 
 	//err = sshSession.Wait()
@@ -398,7 +414,7 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 		}
 	}
 
-	return processSleepSeconds
+	return processLoopSleepSeconds
 
 }
 
