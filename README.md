@@ -22,15 +22,15 @@ Pinging and sniffing require root privileges.
 
 # Use case
 
-Example of logging into a localhost (running linux) as `mpenning`, run `ls -la | grep vim` with command timestamps, and no pings:
+Example of SSH into localhost as `mpenning`, run commands in [`configs/localhost.yaml`][2] with timestamps, and no pings:
 
 - ` ssh_log --yaml configs/localhost.yaml --verbose`
 
-Example of using [`configs/localhost.yaml`][2], which will login to localhost as `mpenning`,  run `ls -la | grep vim` with command timestamps, pings, and sniffer pcaps on `eth0`:
+Example of using [`configs/localhost.yaml`][2], which will SSH as `mpenning`,  run commands in [`configs/localhost.yaml`][2] with timestamps, pings, and sniffer pcaps on `eth0`:
 
 - `sudo ssh_log --yaml configs/localhost.yaml --verbose --pingCount 10 --sniff eth0`
 
-Output of [`configs/localhost.yaml`][2]:
+Contents of the YAML configuration file, [`configs/localhost.yaml`][2]:
 
 ```yaml
 ssh_logger:
@@ -94,7 +94,7 @@ Assume ssh sessions are dropping on your production database server; that's an i
 
 - Timestampped command logs, in UTC and your local timezone
 - Prompt detection
-- ping logs from the server
+- ping logs from the SSH client
 - sniffer logs
 
 # License and Copyright
