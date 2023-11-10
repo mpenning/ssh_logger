@@ -1,7 +1,7 @@
 
 ssh_logger:
   timezone_location: "America/Chicago"
-  process_loop_sleep_seconds: 5
+  ssh_loop_sleep_seconds: 5
   ssh_user: "mpenning"
   ssh_host: "localhost"
   ssh_authentication: "password"

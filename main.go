@@ -45,16 +45,16 @@ type cliOpts struct {
 }
 
 type yamlConfig struct {
-	tzLocation              string
-	sshUser                 string
-	sshHost                 string
-	sshAuthentication       string
-	sshPassword             string
-	sshPromptRegex          string
-	processLoopSleepSeconds int
-	sshPrivilegeCmd         string
-	prefixCmd               string
-	commands                []string
+	tzLocation          string
+	sshUser             string
+	sshHost             string
+	sshAuthentication   string
+	sshPassword         string
+	sshPromptRegex      string
+	sshLoopSleepSeconds int
+	sshPrivilegeCmd     string
+	prefixCmd           string
+	commands            []string
 }
 
 func main() {
@@ -134,7 +134,7 @@ func main() {
 	sshHost := configReader.GetString("ssh_logger.ssh_host")
 	sshAuthentication := configReader.GetString("ssh_logger.ssh_authentication")
 	sshPromptRegex := configReader.GetString("ssh_logger.ssh_prompt_regex")
-	processLoopSleepSeconds := configReader.GetInt("ssh_logger.process_loop_sleep_seconds")
+	sshLoopSleepSeconds := configReader.GetInt("ssh_logger.ssh_loop_sleep_seconds")
 	// There is no support for SSH Enable (i.e. from Cisco IOS) yet...
 	sshPrivilegeCmd := configReader.GetString("ssh_logger.ssh_privilege_command")
 	prefixCmd := configReader.GetString("ssh_logger.prefix_command")
@@ -144,7 +144,7 @@ func main() {
 	// Read the SSH password if the YAML config asks for password authentication
 	/////////////////////////////////////////////////////////////////////////////
 	var password string
-	// handle 'password' or 'password:/path/to/ssh/privatekey'
+	// process 'password' or 'password:/path/to/ssh/privatekey'
 	if len(sshAuthentication) >= 8 {
 		if sshAuthentication[0:8] == "password" {
 			// for now, assume the line and privilege password are the same
@@ -164,30 +164,30 @@ func main() {
 	}
 
 	config := yamlConfig{
-		tzLocation:              locationStr,
-		sshUser:                 sshUser,
-		sshHost:                 sshHost,
-		sshAuthentication:       sshAuthentication,
-		sshPassword:             password,
-		sshPromptRegex:          sshPromptRegex,
-		processLoopSleepSeconds: processLoopSleepSeconds,
-		sshPrivilegeCmd:         sshPrivilegeCmd,
-		prefixCmd:               prefixCmd,
-		commands:                myCommands,
+		tzLocation:          locationStr,
+		sshUser:             sshUser,
+		sshHost:             sshHost,
+		sshAuthentication:   sshAuthentication,
+		sshPassword:         password,
+		sshPromptRegex:      sshPromptRegex,
+		sshLoopSleepSeconds: sshLoopSleepSeconds,
+		sshPrivilegeCmd:     sshPrivilegeCmd,
+		prefixCmd:           prefixCmd,
+		commands:            myCommands,
 	}
 
 	////////////////////////////////////////////////////////////////////////////
-	// run in an infinite loop unless processLoopSleepSeconds is 0
+	// run in an infinite loop unless sshLoopSleepSeconds is 0
 	////////////////////////////////////////////////////////////////////////////
 	ii := 0
 	for {
 		logoru.Debug(fmt.Sprintf("Starting SSH loop idx: %v", ii))
-		processLoopSleepSeconds = sshLoginSession(opts, config)
-		if processLoopSleepSeconds == 0 {
+		sshLoopSleepSeconds = sshLoginSession(opts, config)
+		if sshLoopSleepSeconds == 0 {
 			break
 		} else {
-			logoru.Debug(fmt.Sprintf("Continue SSH loop, sleeping %v seconds", processLoopSleepSeconds))
-			time.Sleep(time.Duration(time.Duration(processLoopSleepSeconds) * time.Second))
+			logoru.Debug(fmt.Sprintf("Continue SSH loop, sleeping %v seconds", sshLoopSleepSeconds))
+			time.Sleep(time.Duration(time.Duration(sshLoopSleepSeconds) * time.Second))
 			ii++
 		}
 	}
@@ -197,7 +197,7 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 
 	sshAuthentication := config.sshAuthentication
 	sshPromptRegex := config.sshPromptRegex
-	processLoopSleepSeconds := config.processLoopSleepSeconds
+	sshLoopSleepSeconds := config.sshLoopSleepSeconds
 	sshPrivilegeCmd := config.sshPrivilegeCmd
 	prefixCmd := config.prefixCmd
 	myCommands := config.commands
@@ -284,7 +284,7 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 			} else {
 				// logoru.Warning() allows the program to continue...
 				logoru.Warning(fmt.Sprintf("0 of %v ICMP %v byte ping packets received (per-ping timeout: %v milliseconds); skipping login while host is down.", opts.pingCount, opts.pingSizeBytes, opts.pingInterval))
-				return processLoopSleepSeconds
+				return sshLoopSleepSeconds
 			}
 		}
 		// Call printPingStats()
@@ -379,14 +379,8 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 		logPrefixConsoleCmd(*console, *logFile, sshSession, opts.verboseTime, config.tzLocation, sshPromptRegex, prefixCmd, myCommands[idx])
 	}
 
-	//err = sshSession.Wait()
-	//matchString, err := console.Expect(expect.RegexpPattern(`closed`))
-	//logoru.Debug(matchString)
-	//if err != nil {
-	//	logoru.Warning(err)
-	//}
-
 	logoru.Success("SSH Session finished")
+	defer sshSession.Wait()
 	console.Tty().Close()
 
 	logoru.Info("SSH Output done")
@@ -414,7 +408,7 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 		}
 	}
 
-	return processLoopSleepSeconds
+	return sshLoopSleepSeconds
 
 }
 
@@ -451,6 +445,7 @@ func logPrefixConsoleCmd(console expect.Console, logFile os.File, sshSession *ex
 	//
 	// console: a Netflix go-expect instance that logs to logFile
 	// logFile: a go file handle from os.OpenFile()
+	// sshSession: a bool to enable verbose log file timestamps
 	// verboseTime: a bool to enable verbose log file timestamps
 	// locationStr: a `time` localization string like 'America/Chicago'
 	// sshPromptRegex: 'route-views>' (unpriv Cisco IOS example)
@@ -501,10 +496,6 @@ func logPrefixConsoleCmd(console expect.Console, logFile os.File, sshSession *ex
 	console.SendLine(cmd)
 	if cmd == "exit" || cmd == "quit" || cmd == "logout" {
 		// if the last explicit command, wait for the ssh session to finish here...
-		err = sshSession.Wait()
-		if err != nil {
-			logoru.Error(err)
-		}
 	} else {
 		// run empty cmd to get another logged prompt
 		_, err = console.Expect(expect.RegexpPattern(sshPromptRegex))
@@ -546,7 +537,6 @@ func spawnSshCmd(authentication string, password string, keepalive string, keyal
 	// Spawn an SSH session based on the type of authentication.  no
 	// auhtentication or key authentication requires no password.
 	////////////////////////////////////////////////////////////////////////////
-
 	if authentication == "none" {
 		sshSession := exec.Command("ssh", sshHostStr)
 		return sshSession
@@ -557,7 +547,7 @@ func spawnSshCmd(authentication string, password string, keepalive string, keyal
 		// Netflix go-expect (apparently the ssh password prompt is not sent to the
 		// terminal the same way that other ssh interactive text is).  This is
 		// different than how Don Libes' Expect handles ssh password prompts (it
-		// sees them without any special sshpass-kludge)
+		// sees the ssh password without any special sshpass-kludge)
 		////////////////////////////////////////////////////////////////////////////
 		sshSession := exec.Command("sshpass", "-p", password, "ssh", sshHostStr)
 		return sshSession
@@ -570,11 +560,6 @@ func spawnSshCmd(authentication string, password string, keepalive string, keyal
 func capturePackets(ctx context.Context, waitGroup *sync.WaitGroup, iface, bpfFilter string) {
 	waitGroup.Add(1)
 	defer waitGroup.Done()
-
-	//ifaces, err := pcap.FindAllDevs()
-	//if err != nil {
-	//	logoru.Error(err)
-	//}
 
 	for packet := range packets(ctx, waitGroup, iface, bpfFilter) {
 		logoru.Debug(packet)
@@ -597,12 +582,12 @@ func packets(ctx context.Context, waitGroup *sync.WaitGroup, iface, bpfFilter st
 		}
 	}
 
-	if handle, err := pcap.OpenLive(iface, int32(maxMtu), false, pcap.BlockForever); err != nil {
+	if pcaphandle, err := pcap.OpenLive(iface, int32(maxMtu), false, pcap.BlockForever); err != nil {
 		logoru.Critical(err)
-	} else if err = handle.SetBPFFilter(bpfFilter); err != nil {
+	} else if err = pcaphandle.SetBPFFilter(bpfFilter); err != nil {
 		logoru.Critical(err)
 	} else {
-		ps := gopacket.NewPacketSource(handle, handle.LinkType())
+		ps := gopacket.NewPacketSource(pcaphandle, pcaphandle.LinkType())
 		for packet := range ps.Packets() {
 			if err := pcapwriter.WritePacket(packet.Metadata().CaptureInfo, packet.Data()); err != nil {
 				logoru.Critical(err)
@@ -613,7 +598,7 @@ func packets(ctx context.Context, waitGroup *sync.WaitGroup, iface, bpfFilter st
 			defer waitGroup.Done()
 			<-ctx.Done()
 			logoru.Debug("Closing the pcap handle.")
-			handle.Close()
+			pcaphandle.Close()
 			logoru.Debug("Closed the pcap handle.")
 		}()
 		return ps.Packets()
