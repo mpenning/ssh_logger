@@ -62,7 +62,7 @@ Usage of ./ssh_logger:
 
 ## Build the binary
 
-Use
+Use [GNU `make`][5]
 
 - `make`
 
@@ -102,4 +102,5 @@ Assume ssh sessions are dropping on your production database server; that's an i
 [2]: https://github.com/mpenning/ssh_logger/blob/main/configs/localhost.yaml
 [3]: https://github.com/Netflix/go-expect
 [4]: https://man.freebsd.org/cgi/man.cgi?script(1)
+[5]: https://www.gnu.org/software/make/
 
