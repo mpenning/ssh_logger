@@ -7,9 +7,15 @@
 *.dll
 *.so
 *.dylib
+ssh_logger
+session.pcap
+
+# Ignore various repo text files
+commands.log
 
 # go.sum should always be ignored by git
 go.sum
+
 
 # Test binary, built with `go test -c`
 *.test
