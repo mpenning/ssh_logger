@@ -8,14 +8,16 @@ COL_END=\033[0;0m
 
 .DEFAULT_GOAL := all
 
-get_mod_latest:
-	@echo "$(COL_CYAN)>> build a NEW go.mod and compile$(COL_END)"
+# This is NOT run by default
+revise_go_mod:
+	@echo "$(COL_CYAN)>> Revise go.mod, and compile$(COL_END)"
 	# build a **new** go.mod file
 	-rm go.mod
 	go mod init ssh_logger
 	go mod tidy
-.PHONY: get_mod_latest
+.PHONY: revise_go_mod
 
+# This is run by default
 fmt:
 	@echo "$(COL_GREEN)>> reformatting with 'go fmt'$(COL_END)"
 	go fmt *.go
