@@ -2,30 +2,48 @@
 
 **WARNING**: This is still a work-in-progress.
 
-Read a yaml config, and run some pre-defined commands from the yaml config with Netflix's [`go-expect`](https://github.com/Netflix/go-expect).
+Read a `yaml` config, and run some pre-defined commands from the config with Netflix's [`go-expect`][3].
 
 In short, log ssh session command output; batteries included.
 
 - Pre-scripted command configs, per-host
-- Optionally-timestampped command logs
-- ping logs
-- Server sniffer logs
+- Customizable CLI prompt detection
+- Optionally-timestampped command logs (both UTC and local timezones)
+- ping logs (requires root)
+- Server sniffer logs (requries root)
 
 You need to have `ssh` and `sshpass` installed in your operating-system.
 
 Pinging and sniffing require root privileges.
 
-## Help
+## Use case
 
-Example of logging into a localhost as `mpenning`,  and run `ls -la | grep vim` with command timestamps and no pings:
+Example of logging into a localhost (running linux) as `mpenning`, run `ls -la | grep vim` with command timestamps, and no pings:
 
 - ` ssh_log --yaml configs/localhost.yaml --verbose`
 
-Example of logging into a localhost as `mpenning`,  and run `ls -la | grep vim` with command timestamps, pings, and sniffer pcaps on `eth0`:
+Example of using [`configs/localhost.yaml`][2], which will login to localhost as `mpenning`,  run `ls -la | grep vim` with command timestamps, pings, and sniffer pcaps on `eth0`:
 
 - `sudo ssh_log --yaml configs/localhost.yaml --verbose --pingCount 10 --sniff eth0`
 
-All help:
+Output of [`configs/localhost.yaml`][2]:
+
+```yaml
+ssh_logger:
+  timezone_location: America/Chicago
+  process_loop_sleep_seconds: 5
+  ssh_user: mpenning
+  ssh_host: localhost
+  ssh_authentication: password
+  ssh_prompt_regex: \$
+  ssh_enable_command: enable
+  prefix_command: date
+  commands:
+  - ls -la | grep vim
+  - exit
+```
+
+## Help
 
 ```
 $ ./ssh_logger -h
@@ -44,6 +62,8 @@ Usage of ./ssh_logger:
 
 ## Build the binary
 
+Use
+
 - `make`
 
 or
@@ -52,7 +72,7 @@ or
 
 ## Inspiration from real life
 
-- Question: Why did you build a custom Go binary to log ssh sessions when you can simply log the output of an ssh session with the [`script`](https://man.freebsd.org/cgi/man.cgi?script(1)) command: `script -c 'ssh foo@bar' log.txt`?
+- Question: Why did you build a custom Go binary to log ssh sessions when you can simply log the output of an ssh session with the [`script`][4] command: `script -c 'ssh foo@bar' log.txt`?
 - Answer: Key words above are "batteries included".  Real ssh session drops often devolve into a basket of unfun and time-consuming tasks.
 
 Assume ssh sessions are dropping on your production database server; that's an important problem to solve, especially if the network is dropping traffic (which means your database sessions themselves are slowing down from network packet drops).
@@ -66,9 +86,10 @@ Assume ssh sessions are dropping on your production database server; that's an i
 7. I now get to scrounge around for spare PC(s) to use as sniffers because nobody invested ahead of time in dedicated sniffer appliances; install linux on said PCs.
 8. Once I have sniffer traces, the problem is not easily visible since SSH is encrypted, SSH / TCP keepalives can be intermixed with keystrokes, and TCP can batch packets together (i.e. if it uses TCP Nagle)
 
-The following logs provide evidence for the problem:
+[`ssh_logger`][1] logs provide proactive evidence for the problem:
 
-- Timestampped command logs
+- Timestampped command logs, in UTC and your local timezone
+- Prompt detection
 - ping logs from the server
 - sniffer logs
 
@@ -76,3 +97,9 @@ The following logs provide evidence for the problem:
 
 - Apache 2.0 License
 - Copyright David Michael Pennington, 2023
+
+[1]: https://github.com/mpenning/ssh_logger/
+[2]: https://github.com/mpenning/ssh_logger/blob/main/configs/localhost.yaml
+[3]: https://github.com/Netflix/go-expect
+[4]: https://man.freebsd.org/cgi/man.cgi?script(1)
+
