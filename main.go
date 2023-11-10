@@ -16,6 +16,8 @@ import (
 	// viper is a multi-lingual config-reader: toml, ini, json, etc...
 	"github.com/spf13/viper"
 
+	"golang.org/x/crypto/ssh/terminal"
+
 	// Netflix go-expect provides a golang Expect library...
 	expect "github.com/Netflix/go-expect"
 	// gopacket requires libpcap-dev
@@ -41,7 +43,20 @@ type cliOpts struct {
 	verboseTime        bool
 }
 
+type yamlConfig struct {
+	tzLocation          string
+	sshUser             string
+	sshHost             string
+	sshAuthentication   string
+	sshPassword         string
+	sshPromptRegex      string
+	processSleepSeconds int
+	clockCmd            string
+	commands            []string
+}
+
 func main() {
+
 	////////////////////////////////////////////////////////////////////////////
 	// parse CLI flags here
 	////////////////////////////////////////////////////////////////////////////
@@ -76,29 +91,6 @@ func main() {
 	}
 
 	////////////////////////////////////////////////////////////////////////////
-	// run in an infinite loop unless processSleepSeconds is 0
-	////////////////////////////////////////////////////////////////////////////
-	var processSleepSeconds int
-	ii := 0
-	for {
-		logoru.Debug(fmt.Sprintf("Starting SSH loop idx: %v", ii))
-		processSleepSeconds = sshLoginSession(opts)
-		if processSleepSeconds == 0 {
-			break
-		} else {
-			logoru.Debug(fmt.Sprintf("Continue SSH loop, sleeping %v seconds", processSleepSeconds))
-			time.Sleep(time.Duration(time.Duration(processSleepSeconds) * time.Second))
-			ii++
-		}
-	}
-
-}
-
-func sshLoginSession(opts cliOpts) int {
-
-	var passwordStr []byte
-
-	////////////////////////////////////////////////////////////////////////////
 	// Initial ini-file support here
 	////////////////////////////////////////////////////////////////////////////
 	configReader := viper.New()
@@ -121,6 +113,59 @@ func sshLoginSession(opts cliOpts) int {
 	//sshEnableCmd := configReader.GetString("ssh_logger.ssh_enable_commmand")
 	clockCmd := configReader.GetString("ssh_logger.prefix_command")
 	myCommands := configReader.GetStringSlice("ssh_logger.commands")
+
+	var password string
+	if sshAuthentication != "none" {
+		fmt.Print("Enter SSH password: ")
+		passwordBytes, err := terminal.ReadPassword(0)
+		if err != nil {
+			logoru.Critical(err)
+		}
+		password = string(passwordBytes)
+	} else {
+		password = ""
+	}
+
+	config := yamlConfig{
+		tzLocation:          locationStr,
+		sshUser:             sshUser,
+		sshHost:             sshHost,
+		sshAuthentication:   sshAuthentication,
+		sshPassword:         password,
+		sshPromptRegex:      sshPromptRegex,
+		processSleepSeconds: processSleepSeconds,
+		clockCmd:            clockCmd,
+		commands:            myCommands,
+	}
+
+	////////////////////////////////////////////////////////////////////////////
+	// run in an infinite loop unless processSleepSeconds is 0
+	////////////////////////////////////////////////////////////////////////////
+	ii := 0
+	for {
+		logoru.Debug(fmt.Sprintf("Starting SSH loop idx: %v", ii))
+		processSleepSeconds = sshLoginSession(opts, config)
+		if processSleepSeconds == 0 {
+			break
+		} else {
+			logoru.Debug(fmt.Sprintf("Continue SSH loop, sleeping %v seconds", processSleepSeconds))
+			time.Sleep(time.Duration(time.Duration(processSleepSeconds) * time.Second))
+			ii++
+		}
+	}
+}
+
+func sshLoginSession(opts cliOpts, config yamlConfig) int {
+
+	// Read the slice of commands listed under the ssh_logger / commands keys...
+	locationStr := config.tzLocation
+	sshUser := config.sshUser
+	sshHost := config.sshHost
+	sshAuthentication := config.sshAuthentication
+	sshPromptRegex := config.sshPromptRegex
+	processSleepSeconds := config.processSleepSeconds
+	clockCmd := config.clockCmd
+	myCommands := config.commands
 
 	/////////////////////////////////////////////////////////////////////////////
 	// Open a new SSH command log file here
@@ -224,6 +269,7 @@ func sshLoginSession(opts cliOpts) int {
 		logoru.Debug(fmt.Sprintf("Calling `ssh -o %v -o %v %v`", keepAliveArg, keyExchangeArg, sshHostStr))
 	}
 	sshSession := exec.Command("ssh", "-o", keepAliveArg, "-o", keyExchangeArg, sshHostStr)
+	sshSession = spawnSshCmd(sshAuthentication, config.sshPassword, fmt.Sprint(opts.sshKeepalive), keyExchangAlgorithms, sshHostStr)
 
 	loginTimeStamp := fmt.Sprintf("\n~~~ LOGIN attempt to %v at %v / %v ~~~\n", sshHostStr, login.In(utcTimeZone), login.In(locationTimeZone))
 	_, err = logFile.WriteString(loginTimeStamp)
@@ -261,17 +307,6 @@ func sshLoginSession(opts cliOpts) int {
 		_, err = console.Expect(expect.RegexpPattern(sshPromptRegex))
 		if err != nil {
 			logoru.Error(err)
-		}
-		if false {
-			logoru.Warning("DBG 1")
-			donec := make(chan struct{})
-			go func() {
-				defer close(donec)
-				logoru.Warning("Sending password")
-				console.SendLine(string(passwordStr))
-				console.Send("\n")
-			}()
-			<-donec
 		}
 	} else {
 		logoru.Critical(fmt.Sprintf("Unhandled SSH password prompt: %v", sshAuthentication))
@@ -464,6 +499,32 @@ func logPrefixConsoleCmd(console expect.Console, logFile os.File, sshSession *ex
 		}
 	}
 
+}
+
+func spawnSshCmd(authentication string, password string, keepalive string, keyalgorithms string, sshHostStr string) *exec.Cmd {
+	////////////////////////////////////////////////////////////////////////////
+	// Spawn an SSH session based on the type of authentication.  no
+	// auhtentication or key authentication requires no password.
+	////////////////////////////////////////////////////////////////////////////
+
+	if authentication == "none" {
+		sshSession := exec.Command("ssh", sshHostStr)
+		return sshSession
+	} else if authentication == "password" {
+		////////////////////////////////////////////////////////////////////////////
+		// Use sshpass to automagically insert the password into the ssh session
+		// since it's exceptionally-hard to do so interactively with
+		// Netflix go-expect (apparently the ssh password prompt is not sent to the
+		// terminal the same way that other ssh interactive text is).  This is
+		// different than how Don Libes' Expect handles ssh password prompts (it
+		// sees them without any special sshpass-kludge)
+		////////////////////////////////////////////////////////////////////////////
+		sshSession := exec.Command("sshpass", "-p", password, "ssh", sshHostStr)
+		return sshSession
+	} else {
+		logoru.Critical(fmt.Sprintf("Authentication %v is not supported", authentication))
+	}
+	return nil
 }
 
 func capturePackets(ctx context.Context, waitGroup *sync.WaitGroup, iface, bpfFilter string) {
