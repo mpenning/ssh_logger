@@ -12,7 +12,11 @@ In short, log ssh session command output; batteries included.
 - ping logs (requires root)
 - Server sniffer logs (requries root)
 
-You need to have [`ssh`][6] and [`sshpass`][7] installed in your operating-system; [`ssh`][6] must be [OpenSSH][6].
+You need to have:
+
+- [Go][10]
+- [`ssh`][6], [`sshpass`][7]. [OpenSSH][6] is required.
+- [`libpcap-dev`][8] (Unix-like OS) / [npcap][9] (Windows)installed in your operating-system
 
 Pinging and sniffing require root privileges.
 
@@ -105,4 +109,6 @@ Assume ssh sessions are dropping on your production database server; that's an i
 [5]: https://www.gnu.org/software/make/
 [6]: https://www.openssh.com/
 [7]: https://linux.die.net/man/1/sshpass
-
+[8]: https://www.tcpdump.org/
+[9]: https://npcap.com/
+[10]: https://go.dev/
