@@ -12,7 +12,7 @@ In short, log ssh session command output; batteries included.
 - ping logs (requires root)
 - Server sniffer logs (requries root)
 
-You need to have `ssh` and `sshpass` installed in your operating-system.
+You need to have [`ssh`][6] and [`sshpass`][7] installed in your operating-system; [`ssh`][6] must be [OpenSSH][6].
 
 Pinging and sniffing require root privileges.
 
@@ -101,6 +101,8 @@ Assume ssh sessions are dropping on your production database server; that's an i
 [1]: https://github.com/mpenning/ssh_logger/
 [2]: https://github.com/mpenning/ssh_logger/blob/main/configs/localhost.yaml
 [3]: https://github.com/Netflix/go-expect
-[4]: https://man.freebsd.org/cgi/man.cgi?script(1)
+[4]: https://linux.die.net/man/1/script
 [5]: https://www.gnu.org/software/make/
+[6]: https://www.openssh.com/
+[7]: https://linux.die.net/man/1/sshpass
 
