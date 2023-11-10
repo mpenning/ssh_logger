@@ -116,8 +116,8 @@ func main() {
 	// Initial YAML-file support here
 	////////////////////////////////////////////////////////////////////////////
 	configReader := viper.New()
-	configReader.AddConfigPath(".")                          // read relative to this directory
-	configReader.AddConfigPath("$HOME/.ssh_logger/configs/") // read from the home directory
+	configReader.AddConfigPath(".") // read CLI paths relative to this directory
+	configReader.AddConfigPath("/") // read CLI absolute paths
 	// for Cisco IOS (and other vendor) commands, yaml markup is
 	// superior to ini markup.
 	configReader.SetConfigName(opts.yaml)
