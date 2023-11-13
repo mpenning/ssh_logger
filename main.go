@@ -201,13 +201,6 @@ func main() {
 
 func SshLoginSession(opts cliOpts, config yamlConfig) int {
 
-	sshAuthentication := config.sshAuthentication
-	sshPromptRegex := config.sshPromptRegex
-	sshLoopSleepSeconds := config.sshLoopSleepSeconds
-	sshPrivilegeCmd := config.sshPrivilegeCmd
-	prefixCmd := config.prefixCmd
-	myCommands := config.commands
-
 	/////////////////////////////////////////////////////////////////////////////
 	// Open a new SSH command log file here
 	/////////////////////////////////////////////////////////////////////////////
@@ -290,7 +283,7 @@ func SshLoginSession(opts cliOpts, config yamlConfig) int {
 			} else {
 				// logoru.Warning() allows the program to continue...
 				logoru.Warning(fmt.Sprintf("0 of %v ICMP %v byte ping packets received (per-ping timeout: %v milliseconds); skipping login while host is down.", opts.pingCount, opts.pingSizeBytes, opts.pingInterval))
-				return sshLoopSleepSeconds
+				return config.sshLoopSleepSeconds
 			}
 		}
 		// Call PrintPingStats()
@@ -309,8 +302,7 @@ func SshLoginSession(opts cliOpts, config yamlConfig) int {
 	if opts.debug {
 		logoru.Debug(fmt.Sprintf("Calling `ssh -o %v -o %v %v`", keepAliveArg, keyExchangeArg, sshHostStr))
 	}
-	logoru.Debug(opts.sshKexAlgorithms)
-	sshSession := SpawnSshCmd(sshAuthentication, config.sshPassword, fmt.Sprint(opts.sshKeepalive), opts.sshKexAlgorithms, sshHostStr)
+	sshSession := SpawnSshCmd(config.sshAuthentication, config.sshPassword, fmt.Sprint(opts.sshKeepalive), opts.sshKexAlgorithms, sshHostStr)
 
 	loginTimeStamp := fmt.Sprintf("\n~~~ LOGIN attempt to %v at %v / %v ~~~\n", sshHostStr, login.In(utcTimeZone), login.In(locationTimeZone))
 	_, err = logFile.WriteString(loginTimeStamp)
@@ -330,9 +322,9 @@ func SshLoginSession(opts cliOpts, config yamlConfig) int {
 	}
 	logoru.Info(fmt.Sprintf("Spawned SSH session to %v", config.sshHost))
 
-	if sshAuthentication == "none" {
+	if config.sshAuthentication == "none" {
 		logoru.Debug("Logging in with no SSH authentication")
-	} else if sshAuthentication == "password" {
+	} else if config.sshAuthentication == "password" {
 
 		////////////////////////////////////////////////////////////////////////////
 		// Do NOT explicitly wait for the password prompt here
@@ -345,12 +337,12 @@ func SshLoginSession(opts cliOpts, config yamlConfig) int {
 		if err != nil {
 			logoru.Error(err)
 		}
-		_, err = console.Expect(expect.RegexpPattern(sshPromptRegex))
+		_, err = console.Expect(expect.RegexpPattern(config.sshPromptRegex))
 		if err != nil {
 			logoru.Error(err)
 		}
 	} else {
-		logoru.Critical(fmt.Sprintf("Unhandled SSH password prompt: %v", sshAuthentication))
+		logoru.Critical(fmt.Sprintf("Unhandled SSH password prompt: %v", config.sshAuthentication))
 	}
 
 	/////////////////////////////////////////////////////////////////////////////
@@ -358,8 +350,8 @@ func SshLoginSession(opts cliOpts, config yamlConfig) int {
 	// other multiline input before it.  The following code isolates the
 	// match to just the sshPromptRegex
 	/////////////////////////////////////////////////////////////////////////////
-	erroneousMatch, err := console.Expect(expect.RegexpPattern(sshPromptRegex))
-	matchGroupRegex := regexp.MustCompile(fmt.Sprintf("(?P<re_prompt>%v)", sshPromptRegex))
+	erroneousMatch, err := console.Expect(expect.RegexpPattern(config.sshPromptRegex))
+	matchGroupRegex := regexp.MustCompile(fmt.Sprintf("(?P<re_prompt>%v)", config.sshPromptRegex))
 	match := matchGroupRegex.FindStringSubmatch(erroneousMatch)
 	namedMatch := make(map[string]string)
 	for idx, matchGroup := range matchGroupRegex.SubexpNames() {
@@ -375,14 +367,14 @@ func SshLoginSession(opts cliOpts, config yamlConfig) int {
 	/////////////////////////////////////////////////////////////////////////////
 	// send each command in the YAML file to sshHost
 	/////////////////////////////////////////////////////////////////////////////
-	if sshPrivilegeCmd != "" {
-		logoru.Info(sshPrivilegeCmd)
+	if config.sshPrivilegeCmd != "" {
+		logoru.Info(config.sshPrivilegeCmd)
 		// Send sshPrivilegeCmd once
-		LogPrefixConsoleCmd(*console, *logFile, sshSession, opts.verboseTime, config.tzLocation, sshPromptRegex, prefixCmd, sshPrivilegeCmd)
+		LogPrefixConsoleCmd(*console, *logFile, sshSession, opts.verboseTime, config.tzLocation, config.sshPromptRegex, config.prefixCmd, config.sshPrivilegeCmd)
 	}
-	for idx, _ := range myCommands {
-		logoru.Info(myCommands[idx])
-		LogPrefixConsoleCmd(*console, *logFile, sshSession, opts.verboseTime, config.tzLocation, sshPromptRegex, prefixCmd, myCommands[idx])
+	for idx, _ := range config.commands {
+		logoru.Info(config.commands[idx])
+		LogPrefixConsoleCmd(*console, *logFile, sshSession, opts.verboseTime, config.tzLocation, config.sshPromptRegex, config.prefixCmd, config.commands[idx])
 	}
 
 	logoru.Success(fmt.Sprintf("SSH session to %v finished", config.sshHost))
@@ -412,7 +404,7 @@ func SshLoginSession(opts cliOpts, config yamlConfig) int {
 		}
 	}
 
-	return sshLoopSleepSeconds
+	return config.sshLoopSleepSeconds
 
 }
 
