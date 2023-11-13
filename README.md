@@ -77,6 +77,7 @@ Usage of ./ssh_logger:
       --pingSize int               Specify the ping size, in bytes (default 64)
       --sniff string               Name of interface to sniff (default "__UNDEFINED__")
       --sshKeepalive int           Specify ssh keepalive timeout, in seconds (default 60)
+      --sshKexAlgorithms string    List of accepted KexAlgorithms (default "ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha256,diffie-hellman-group-exchange-sha1,diffie-hellman-group14-sha1,diffie-hellman-group1-sha1")
       --verbose                    Flag to enable verbose log timestamps, default is False
       --yaml string                Path to the YAML configuration file (default "__UNDEFINED__")
 ```
