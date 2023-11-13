@@ -99,13 +99,15 @@ or
 
 Assume ssh sessions are dropping on your production database server; that's an important problem to solve, especially if the network is dropping traffic (which means your database sessions themselves are slowing down from network packet drops).
 
-[`ssh_logger`][1] helps provide proactive evidence for the problem:
+[`ssh_logger`][1] helps provide proactive evidence for the problem, and:
 
-- It avoids the need to install Don Libes' [Expect][13] on the client PC
 - It's easy to script common use-cases
+- It avoids the need to install Don Libes' [Expect][13] on the client PC
+- It avoids the need to a [sniffer application][14] on the client PC
 - It builds timestampped command logs, in UTC and your local timezone
 - It keeps ping logs from the SSH client
 - It keeps sniffer logs from the SSH client
+- It's wrapped into a (portable) binary executable
 
 # License and Copyright
 
@@ -125,3 +127,4 @@ Assume ssh sessions are dropping on your production database server; that's an i
 [11]: https://python.org/
 [12]: https://linux.die.net/man/1/date
 [13]: https://github.com/aeruder/expect/tree/master
+[14]: https://wireshark.org/
