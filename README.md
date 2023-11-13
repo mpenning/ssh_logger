@@ -94,19 +94,11 @@ or
 # Inspiration from real life
 
 - Question: Why did you build a custom Go binary to log ssh sessions when you can simply log the output of an ssh session with the [`script`][4] command: `script -c 'ssh foo@bar' log.txt`?
-- Answer: Real SSH session drops often devolve into a list of time-consuming tasks.
+- Answer: Real SSH session drops often devolve into a list of time-consuming tasks, and `ssh_logger` helps with some of them.
 
 Assume ssh sessions are dropping on your production database server; that's an important problem to solve, especially if the network is dropping traffic (which means your database sessions themselves are slowing down from network packet drops).
 
-1. Most basic, why is your ssh session dropping intermittantly? Is it the network, the server, or both?
-2. Since it could be the network, call the network engineer.
-3. Now I also sit with a user at their desk and run pings to various network switches from their PC while we reproduce the problem.  In order to find the problem, I have to install a basket of software on each client PC I check.
-4. Once we know how to reproduce the problem, someone will insist that I sniff it because we have to prove whether it is or is not the network.
-5. Since it's a **production** database server, the aforementioned server usually does NOT have a sniffer already installed.  If we work in an ITIL environment, I must file an ITIL change request, and thus more delays (usually a week, including scheduling delays) before I can start the detailed work of solving the problem.
-6. I now get to scrounge around for spare PC(s) to use as sniffers because nobody invested ahead of time in dedicated sniffer appliances; install linux on said PCs.
-7. Once I have sniffer traces, the problem is not easily visible since SSH is encrypted, SSH / TCP keepalives can be intermixed with keystrokes, and TCP can batch packets together (i.e. if it uses TCP Nagle)
-
-Nevertheless, [`ssh_logger`][1] helps provide proactive evidence for the problem:
+[`ssh_logger`][1] helps provide proactive evidence for the problem:
 
 - It's easy to script common use-cases
 - It builds timestampped command logs, in UTC and your local timezone
