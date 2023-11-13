@@ -101,6 +101,7 @@ Assume ssh sessions are dropping on your production database server; that's an i
 
 [`ssh_logger`][1] helps provide proactive evidence for the problem:
 
+- It avoids the need to install Don Libes' [Expect][13] on the client PC
 - It's easy to script common use-cases
 - It builds timestampped command logs, in UTC and your local timezone
 - It keeps ping logs from the SSH client
@@ -123,3 +124,4 @@ Assume ssh sessions are dropping on your production database server; that's an i
 [10]: https://go.dev/
 [11]: https://python.org/
 [12]: https://linux.die.net/man/1/date
+[13]: https://github.com/aeruder/expect/tree/master
