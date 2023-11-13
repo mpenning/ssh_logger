@@ -107,7 +107,7 @@ Assume ssh sessions are dropping on your production database server; that's an i
 - It builds timestampped command logs, in UTC and your local timezone
 - It keeps ping logs from the SSH client
 - It keeps sniffer logs from the SSH client
-- It's wrapped into a (portable) binary executable
+- It's wrapped into a (portable) binary executable; build once, use many
 
 # License and Copyright
 
