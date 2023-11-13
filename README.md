@@ -6,7 +6,7 @@ Read a `yaml` config, and loop through some pre-defined commands from the config
 
 In short, log SSH Client output; batteries included.
 
-- Pre-scripted command configs, per-host
+- Pre-scripted YAML command configs, per-host
 - Customizable CLI prompt detection
 - Optionally-timestampped command logs (both UTC and local timezones)
 - ping logs (requires elevated privileges)
@@ -16,20 +16,18 @@ In short, log SSH Client output; batteries included.
 To build the [`ssh_logger`][1] client, you need to have:
 
 - [Go][10]
-- [`ssh`][6], [`sshpass`][7]. [OpenSSH][6] is required.
+- [`ssh`][6] and [`sshpass`][7]; [OpenSSH][6] is required.
 - [`libpcap-dev`][8] (Unix-like OS) / [npcap][9] (Windows) installed in your operating-system
 
 It's all wrapped into one portable binary that you can install on any number of clients; this is a key advantage of developing in [Go][10] (for instance, compared with [Python][11]).  Developing this in [Python][11] would result in a much slower runtime, the inability to reliabily sniff (because of slow execution), and you would need to download all build dependencies on every new [`ssh_logger`][1] client.
 
 # Use case
 
-Example of SSH into 127.0.0.1 as `mpenning`, loop through commands in [`configs/localhost.yaml`][2] with timestamps, and no pings:
+- Example of SSH into 127.0.0.1 as `mpenning`, loop through commands in [`configs/localhost.yaml`][2] with timestamps, and no pings:
+  - ` ssh_log --yaml configs/localhost.yaml --verbose`
 
-- ` ssh_log --yaml configs/localhost.yaml --verbose`
-
-Example of using [`configs/localhost.yaml`][2], which will SSH as `mpenning`,  loop through commands with timestamps, pings, and sniffer pcaps on `eth0`:
-
-- `sudo ssh_log --yaml configs/localhost.yaml --verbose --pingCount 10 --sniff eth0`
+- Example of using [`configs/localhost.yaml`][2], which will SSH as `mpenning`,  loop through commands with timestamps, pings, and sniffer pcaps on `eth0`:
+  - `sudo ssh_log --yaml configs/localhost.yaml --verbose --pingCount 10 --sniff eth0`
 
 # YAML Configuration Help
 
@@ -96,7 +94,7 @@ or
 # Inspiration from real life
 
 - Question: Why did you build a custom Go binary to log ssh sessions when you can simply log the output of an ssh session with the [`script`][4] command: `script -c 'ssh foo@bar' log.txt`?
-- Answer: Key words above are "batteries included".  Real ssh session drops often devolve into a basket of unfun and time-consuming tasks.
+- Answer: Real SSH session drops often devolve into a list of time-consuming tasks.
 
 Assume ssh sessions are dropping on your production database server; that's an important problem to solve, especially if the network is dropping traffic (which means your database sessions themselves are slowing down from network packet drops).
 
@@ -108,12 +106,12 @@ Assume ssh sessions are dropping on your production database server; that's an i
 6. I now get to scrounge around for spare PC(s) to use as sniffers because nobody invested ahead of time in dedicated sniffer appliances; install linux on said PCs.
 7. Once I have sniffer traces, the problem is not easily visible since SSH is encrypted, SSH / TCP keepalives can be intermixed with keystrokes, and TCP can batch packets together (i.e. if it uses TCP Nagle)
 
-[`ssh_logger`][1] helps provide proactive evidence for the problem:
+Nevertheless, [`ssh_logger`][1] helps provide proactive evidence for the problem:
 
-- Build timestampped command logs, in UTC and your local timezone
-- Prompt detection
-- ping logs from the SSH client
-- sniffer logs from the SSH client
+- It's easy to script common use-cases
+- It builds timestampped command logs, in UTC and your local timezone
+- It keeps ping logs from the SSH client
+- It keeps sniffer logs from the SSH client
 
 # License and Copyright
 

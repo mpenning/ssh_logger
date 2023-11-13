@@ -36,6 +36,7 @@ type cliOpts struct {
 	yaml               string
 	sniff              string
 	sshKeepalive       int
+	sshKexAlgorithms   string
 	pingCount          int
 	pingInterval       int
 	pingSizeBytes      int
@@ -59,6 +60,8 @@ type yamlConfig struct {
 
 func main() {
 
+	keyExchangeAlgorithms := "ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha256,diffie-hellman-group-exchange-sha1,diffie-hellman-group14-sha1,diffie-hellman-group1-sha1"
+
 	////////////////////////////////////////////////////////////////////////////
 	// parse CLI flags here
 	////////////////////////////////////////////////////////////////////////////
@@ -66,6 +69,8 @@ func main() {
 	sniffPtr := pflag.String("sniff", "__UNDEFINED__", "Name of interface to sniff")
 	yamlPtr := pflag.String("yaml", "__UNDEFINED__", "Path to the YAML configuration file")
 	sshKeepalivePtr := pflag.Int("sshKeepalive", 60, "Specify ssh keepalive timeout, in seconds")
+	sshKexAlgorithms := pflag.String("sshKexAlgorithms", keyExchangeAlgorithms, "List of accepted KexAlgorithms")
+
 	pingCountPtr := pflag.Int("pingCount", 0, "Specify the number of pings")
 	pingIntervalPtr := pflag.Int("pingInterval", 200, "Specify the ping interval, in milliseconds")
 	pingSizeBytesPtr := pflag.Int("pingSize", 64, "Specify the ping size, in bytes")
@@ -83,6 +88,7 @@ func main() {
 		commandLogFilename: *commandLogFilenamePtr,
 		yaml:               *yamlPtr,
 		sshKeepalive:       *sshKeepalivePtr,
+		sshKexAlgorithms:   *sshKexAlgorithms,
 		sniff:              *sniffPtr,
 		pingCount:          *pingCountPtr,
 		pingInterval:       *pingIntervalPtr,
@@ -182,7 +188,7 @@ func main() {
 	ii := 0
 	for {
 		logoru.Debug(fmt.Sprintf("Starting SSH loop idx: %v", ii))
-		sshLoopSleepSeconds = sshLoginSession(opts, config)
+		sshLoopSleepSeconds = SshLoginSession(opts, config)
 		if sshLoopSleepSeconds == 0 {
 			break
 		} else {
@@ -193,7 +199,7 @@ func main() {
 	}
 }
 
-func sshLoginSession(opts cliOpts, config yamlConfig) int {
+func SshLoginSession(opts cliOpts, config yamlConfig) int {
 
 	sshAuthentication := config.sshAuthentication
 	sshPromptRegex := config.sshPromptRegex
@@ -227,7 +233,7 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 	waitGroup := &sync.WaitGroup{}
 	if opts.sniff != "__UNDEFINED__" {
 		pcapFilterStr := fmt.Sprintf("host %v", config.sshHost)
-		go capturePackets(ctx, waitGroup, opts.sniff, pcapFilterStr)
+		go CapturePackets(ctx, waitGroup, opts.sniff, pcapFilterStr)
 	}
 
 	// define a UTC time location
@@ -287,12 +293,12 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 				return sshLoopSleepSeconds
 			}
 		}
-		// Call printPingStats()
-		printPingStats(stats, opts.pingSizeBytes)
+		// Call PrintPingStats()
+		PrintPingStats(stats, opts.pingSizeBytes)
 	}
 
 	// get an expect console, and debug if called as such...
-	console := newExpectConsole(opts.debug, logFile)
+	console := NewExpectConsole(opts.debug, logFile)
 	defer console.Close()
 	defer logFile.Close()
 
@@ -303,8 +309,8 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 	if opts.debug {
 		logoru.Debug(fmt.Sprintf("Calling `ssh -o %v -o %v %v`", keepAliveArg, keyExchangeArg, sshHostStr))
 	}
-	sshSession := exec.Command("ssh", "-o", keepAliveArg, "-o", keyExchangeArg, sshHostStr)
-	sshSession = spawnSshCmd(sshAuthentication, config.sshPassword, fmt.Sprint(opts.sshKeepalive), keyExchangAlgorithms, sshHostStr)
+	logoru.Debug(opts.sshKexAlgorithms)
+	sshSession := SpawnSshCmd(sshAuthentication, config.sshPassword, fmt.Sprint(opts.sshKeepalive), opts.sshKexAlgorithms, sshHostStr)
 
 	loginTimeStamp := fmt.Sprintf("\n~~~ LOGIN attempt to %v at %v / %v ~~~\n", sshHostStr, login.In(utcTimeZone), login.In(locationTimeZone))
 	_, err = logFile.WriteString(loginTimeStamp)
@@ -322,7 +328,7 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 	if err != nil {
 		logoru.Error(err)
 	}
-	logoru.Info(fmt.Sprintf("Spawned ssh to %v", config.sshHost))
+	logoru.Info(fmt.Sprintf("Spawned SSH session to %v", config.sshHost))
 
 	if sshAuthentication == "none" {
 		logoru.Debug("Logging in with no SSH authentication")
@@ -372,18 +378,16 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 	if sshPrivilegeCmd != "" {
 		logoru.Info(sshPrivilegeCmd)
 		// Send sshPrivilegeCmd once
-		logPrefixConsoleCmd(*console, *logFile, sshSession, opts.verboseTime, config.tzLocation, sshPromptRegex, prefixCmd, sshPrivilegeCmd)
+		LogPrefixConsoleCmd(*console, *logFile, sshSession, opts.verboseTime, config.tzLocation, sshPromptRegex, prefixCmd, sshPrivilegeCmd)
 	}
 	for idx, _ := range myCommands {
 		logoru.Info(myCommands[idx])
-		logPrefixConsoleCmd(*console, *logFile, sshSession, opts.verboseTime, config.tzLocation, sshPromptRegex, prefixCmd, myCommands[idx])
+		LogPrefixConsoleCmd(*console, *logFile, sshSession, opts.verboseTime, config.tzLocation, sshPromptRegex, prefixCmd, myCommands[idx])
 	}
 
-	logoru.Success("SSH Session finished")
+	logoru.Success(fmt.Sprintf("SSH session to %v finished", config.sshHost))
 	defer sshSession.Wait()
 	console.Tty().Close()
-
-	logoru.Info("SSH Output done")
 
 	// WriteString() a couple of blank lines
 	_, err = logFile.WriteString("\n\n")
@@ -412,7 +416,7 @@ func sshLoginSession(opts cliOpts, config yamlConfig) int {
 
 }
 
-func newExpectConsole(debug bool, logFile *os.File) *expect.Console {
+func NewExpectConsole(debug bool, logFile *os.File) *expect.Console {
 	/////////////////////////////////////////////////////////////////////////////
 	// Create a new Netflix go-expect console and return it...
 	/////////////////////////////////////////////////////////////////////////////
@@ -434,10 +438,10 @@ func newExpectConsole(debug bool, logFile *os.File) *expect.Console {
 	}
 }
 
-func logPrefixConsoleCmd(console expect.Console, logFile os.File, sshSession *exec.Cmd, verboseTime bool, locationStr string, sshPromptRegex string, prefixCmd string, cmd string) {
+func LogPrefixConsoleCmd(console expect.Console, logFile os.File, sshSession *exec.Cmd, verboseTime bool, locationStr string, sshPromptRegex string, prefixCmd string, cmd string) {
 	////////////////////////////////////////////////////////////////////////////
 	//
-	// logPrefixConsoleCommand() can be used when you want to run two commands
+	// LogPrefixConsoleCommand() can be used when you want to run two commands
 	// together.  This is useful as a hack around the lack of Cisco's
 	// `term exec prompt timestamp` VTY command.
 	//
@@ -532,13 +536,13 @@ func logPrefixConsoleCmd(console expect.Console, logFile os.File, sshSession *ex
 
 }
 
-func spawnSshCmd(authentication string, password string, keepalive string, keyalgorithms string, sshHostStr string) *exec.Cmd {
+func SpawnSshCmd(authentication string, password string, keepalive string, keyalgorithms string, sshHostStr string) *exec.Cmd {
 	////////////////////////////////////////////////////////////////////////////
 	// Spawn an SSH session based on the type of authentication.  no
 	// auhtentication or key authentication requires no password.
 	////////////////////////////////////////////////////////////////////////////
 	if authentication == "none" {
-		sshSession := exec.Command("ssh", sshHostStr)
+		sshSession := exec.Command("ssh", "-o", fmt.Sprintf("ServerAliveInterval=%v", keepalive), "-o", fmt.Sprintf("KexAlgorithms=%v", keyalgorithms), sshHostStr)
 		return sshSession
 	} else if authentication == "password" {
 		////////////////////////////////////////////////////////////////////////////
@@ -549,7 +553,7 @@ func spawnSshCmd(authentication string, password string, keepalive string, keyal
 		// different than how Don Libes' Expect handles ssh password prompts (it
 		// sees the ssh password without any special sshpass-kludge)
 		////////////////////////////////////////////////////////////////////////////
-		sshSession := exec.Command("sshpass", "-p", password, "ssh", sshHostStr)
+		sshSession := exec.Command("sshpass", "-p", password, "ssh", "-o", fmt.Sprintf("ServerAliveInterval=%v", keepalive), "-o", fmt.Sprintf("KexAlgorithms=%v", keyalgorithms), sshHostStr)
 		return sshSession
 	} else {
 		logoru.Critical(fmt.Sprintf("Authentication %v is not supported", authentication))
@@ -557,16 +561,16 @@ func spawnSshCmd(authentication string, password string, keepalive string, keyal
 	return nil
 }
 
-func capturePackets(ctx context.Context, waitGroup *sync.WaitGroup, iface, bpfFilter string) {
+func CapturePackets(ctx context.Context, waitGroup *sync.WaitGroup, iface, bpfFilter string) {
 	waitGroup.Add(1)
 	defer waitGroup.Done()
 
-	for packet := range packets(ctx, waitGroup, iface, bpfFilter) {
+	for packet := range Packets(ctx, waitGroup, iface, bpfFilter) {
 		logoru.Debug(packet)
 	}
 }
 
-func packets(ctx context.Context, waitGroup *sync.WaitGroup, iface, bpfFilter string) chan gopacket.Packet {
+func Packets(ctx context.Context, waitGroup *sync.WaitGroup, iface, bpfFilter string) chan gopacket.Packet {
 	maxMtu := 9000
 
 	fh, err := os.Create("session.pcap")
@@ -606,7 +610,7 @@ func packets(ctx context.Context, waitGroup *sync.WaitGroup, iface, bpfFilter st
 	return nil
 }
 
-func printPingStats(stats *probing.Statistics, pingSize int) {
+func PrintPingStats(stats *probing.Statistics, pingSize int) {
 	fmt.Printf("\n--- %s ping statistics ---\n", stats.Addr)
 	fmt.Printf("%d %v byte packets transmitted, %d packets received, %v%% packet loss\n",
 		stats.PacketsSent, pingSize, stats.PacketsRecv, stats.PacketLoss)

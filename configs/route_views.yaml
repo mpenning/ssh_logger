@@ -1,7 +1,8 @@
 
 ssh_logger:
   timezone_location: "America/Chicago"
-  ssh_loop_sleep_seconds: 5
+  ## Set ssh_loop_sleep_seconds to 0 for unit tests
+  ssh_loop_sleep_seconds: 0
   ssh_user: "rviews"
   ssh_host: "route-views.routeviews.org"
   ssh_authentication: "none"

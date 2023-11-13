@@ -28,3 +28,11 @@ all:
 	go build -ldflags "-s -w" -o ssh_logger main.go
 .PHONY: all
 
+test:
+	make all
+	@echo "$(COL_GREEN)>> Test w/ no auth to route-views.routeviews.org$(COL_END)"
+	## ping with an IP address for a deterministic test timeout
+	ping -W1 -c2 4.2.2.2
+	## Run an SSH test to route-views.routeviews.org
+	./ssh_logger --yaml configs/route_views.yaml
+.PHONY: test
